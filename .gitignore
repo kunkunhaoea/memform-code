@@ -4,7 +4,6 @@ venv/
 __pycache__/
 *.py[cod]
 .cache/
-outputs/*
 !outputs/mcq_item_audit/
 outputs/mcq_item_audit/*
 !outputs/mcq_item_audit/accepted_cases.jsonl
