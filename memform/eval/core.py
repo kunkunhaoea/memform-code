@@ -267,6 +267,7 @@ class DiskCache:
     def __post_init__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.data: dict[str, str] = {}
+        self.metadata: dict[str, dict[str, Any]] = {}
         if self.path.exists():
             with self.path.open("r", encoding="utf-8") as f:
                 for line in f:
@@ -278,6 +279,7 @@ class DiskCache:
                         continue
                     if isinstance(row, dict) and row.get("key") and "text" in row:
                         self.data[str(row["key"])] = str(row["text"])
+                        self.metadata[str(row["key"])] = row.get("meta") or {}
 
     def get(self, key: str) -> str | None:
         return self.data.get(key)
@@ -286,6 +288,7 @@ class DiskCache:
         if key in self.data:
             return
         self.data[key] = text
+        self.metadata[key] = meta
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"key": key, "text": text, "meta": meta}, ensure_ascii=False) + "\n")
 
@@ -311,7 +314,21 @@ class CachedChatModel:
         cache_namespace: str = "",
         timeout: float | None = 120.0,
         cache_only: bool = False,
+        max_output_tokens: int | None = None,
+        output_token_field: str = "auto",
+        thinking_mode: str = "default",
     ):
+        from memform.llm_compat import make_chat_client, output_token_field as resolve_field, provider_name, thinking_parameters
+        thinking_body = thinking_parameters(base_url, thinking_mode)
+        if thinking_mode == "off" and reasoning_effort is not None:
+            raise ValueError("Do not combine disabled thinking with a reasoning effort")
+        self.thinking_mode = thinking_mode
+        if max_output_tokens is not None and max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
+        self.max_output_tokens = max_output_tokens
+        self.output_token_field = resolve_field(base_url, output_token_field)
+        self.provider = provider_name(base_url)
+        self.last_call_metadata: dict[str, Any] = {}
         self.cache_only = bool(cache_only)
         self.timeout = None if timeout is None or float(timeout) <= 0 else float(timeout)
         self.max_retries = int(max_retries)
@@ -347,20 +364,27 @@ class CachedChatModel:
                 kwargs["temperature"] = temperature
             if reasoning_effort is not None:
                 kwargs["reasoning_effort"] = reasoning_effort
+            if thinking_body:
+                kwargs["extra_body"] = thinking_body
+            if max_output_tokens is not None:
+                kwargs["max_tokens"] = max_output_tokens
             if base_url:
                 kwargs["base_url"] = base_url
             if api_key:
                 kwargs["api_key"] = api_key
             self._http_client = http_client
-            self.client = ChatOpenAI(**kwargs)
+            self.client = make_chat_client(kwargs, cap=max_output_tokens, field=self.output_token_field)
         self.cache = cache
         self.real_calls = 0
         self.cache_hits = 0
         self.llm_seconds = 0.0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        # Optional per-invocation telemetry. None means unavailable, not zero.
+        self.last_call_usage: dict[str, int] | None = None
 
     def invoke(self, system: str, user: str) -> str:
+        self.last_call_usage = None
         payload = {
             "model": self.model_name,
             "base_url": self.base_url,
@@ -370,12 +394,21 @@ class CachedChatModel:
             "reasoning_effort": self.reasoning_effort,
             "cache_namespace": self.cache_namespace,
         }
+        # Preserve existing cache keys when no output cap is requested.
+        if self.thinking_mode != "default":
+            payload["thinking_mode"] = self.thinking_mode
+        if self.max_output_tokens is not None:
+            payload["max_output_tokens"] = self.max_output_tokens
+            payload["output_token_field"] = self.output_token_field
         key = hashlib.sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
+        self.last_call_metadata = {}
         cached = self.cache.get(key)
         if cached is not None:
             self.cache_hits += 1
+            self.last_call_usage = self.cache.metadata.get(key, {}).get("usage")
+            self.last_call_metadata = self.cache.metadata.get(key, {}).get("response_metadata", {})
             return cached
         if self.cache_only:
             raise CacheOnlyMiss(f"{self.role} cache miss model={self.model_name}")
@@ -432,15 +465,40 @@ class CachedChatModel:
         usage = getattr(response, "usage_metadata", None)
         if usage:
             if isinstance(usage, dict):
+                input_count = usage.get("input_tokens", usage.get("prompt_tokens"))
+                output_count = usage.get("output_tokens", usage.get("completion_tokens"))
+                if input_count is not None and output_count is not None:
+                    self.last_call_usage = {"input_tokens": int(input_count), "output_tokens": int(output_count)}
                 self.prompt_tokens += int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
                 self.completion_tokens += int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
             else:
+                input_count = getattr(usage, "input_tokens", getattr(usage, "prompt_tokens", None))
+                output_count = getattr(usage, "output_tokens", getattr(usage, "completion_tokens", None))
+                if input_count is not None and output_count is not None:
+                    self.last_call_usage = {"input_tokens": int(input_count), "output_tokens": int(output_count)}
                 self.prompt_tokens += int(getattr(usage, "input_tokens", 0) or getattr(usage, "prompt_tokens", 0) or 0)
                 self.completion_tokens += int(getattr(usage, "output_tokens", 0) or getattr(usage, "completion_tokens", 0) or 0)
+        response_meta = getattr(response, "response_metadata", None) or {}
+        reasoning_tokens = None
+        if isinstance(usage, dict):
+            details = usage.get("output_token_details") or usage.get("completion_tokens_details") or {}
+            reasoning_tokens = details.get("reasoning", details.get("reasoning_tokens"))
+        self.last_call_metadata = {
+            "finish_reason": response_meta.get("finish_reason"),
+            "reasoning_tokens": reasoning_tokens,
+            "requested_thinking_mode": self.thinking_mode,
+            "thinking_mode_violation": self.thinking_mode == "off" and isinstance(reasoning_tokens, int) and reasoning_tokens > 0,
+            "requested_output_tokens": self.max_output_tokens,
+            "output_token_field": self.output_token_field if self.max_output_tokens else None,
+            # Aliyun documents a possible difference of up to ten output tokens.
+            "output_limit_exceeded": bool(self.max_output_tokens and self.last_call_usage
+                and self.last_call_usage["output_tokens"] > self.max_output_tokens + (10 if self.provider == "aliyun" else 0)),
+        }
         self.cache.put(
             key,
             text,
-            {"model": self.model_name, "role_first_writer": self.role},
+            {"model": self.model_name, "role_first_writer": self.role, "usage": self.last_call_usage,
+             "response_metadata": self.last_call_metadata},
         )
         self.real_calls += 1
         return text
@@ -623,6 +681,7 @@ def build_learned_memories(
     p5_random_orders: int = 0,
     random_seed: int = 42,
     build_mechanism_controls: bool = True,
+    post_consolidation_guard: Any = None,
 ) -> tuple[str, str, dict[str, Any], dict[str, dict[str, Any]]]:
     interface = case["interface"]
     mb = case["memory_building"]
@@ -676,6 +735,21 @@ def build_learned_memories(
         poison = build_batch_memory(
             model, case, list(mb["poisoned_condition"]["order"]), prompt, max_words
         )
+        if post_consolidation_guard is not None:
+            from memform.defenses.transition_guard.adapter import p4_transition
+
+            reviews = {}
+            for slot, proposed in (("clean", clean), ("poisoned", poison)):
+                transition, updater = p4_transition(
+                    case, list(mb[f"{slot}_condition"]["order"]), proposed, model, max_words,
+                )
+                review = post_consolidation_guard.review(transition, updater)
+                reviews[slot] = review.to_dict()
+                if slot == "clean":
+                    clean = review.final_memory
+                else:
+                    poison = review.final_memory
+            traces["post_consolidation"] = reviews
         full_pool = list(
             mb.get("mechanism_controls", {})
               .get("full_pool", {})
@@ -956,11 +1030,20 @@ def run_case(
     freeform_run_controls: bool = False,
     defense: Any = None,
     defense_log: list[dict[str, Any]] | None = None,
+    post_consolidation_guard: Any = None,
+    run_mechanism_controls: bool | None = None,
+    always_defer: bool = False,
 ) -> dict[str, Any]:
     oracle = case["memory_building"]["oracle_memory"]
     need_oracle = phase in {"oracle", "all"}
     need_learned = phase in {"learned", "all"}
     freeform = is_freeform_case(case)
+    if always_defer and (phase != "learned" or case["interface"] != "P4" or freeform
+                         or defense is not None or post_consolidation_guard is not None
+                         or run_mechanism_controls is not False):
+        raise ValueError("Always-defer requires P4 MCQ learned-only without defenses or mechanism controls")
+    if post_consolidation_guard is not None and (case["interface"] != "P4" or freeform or defense is not None):
+        raise ValueError("Post-consolidation guard requires P4 MCQ without a write-time defense")
 
     if freeform and target_alignment:
         raise ValueError("--target-alignment is an MCQ-only diagnostic; free-form uses its own blind cascade evaluator")
@@ -973,6 +1056,8 @@ def run_case(
             session.attach_shared_log(defense_log)
 
     use_controls = (not freeform or freeform_run_controls)
+    if run_mechanism_controls is not None:
+        use_controls = bool(run_mechanism_controls)
     random_n = p5_random_orders if use_controls else 0
     deferred = bool(
         session is not None
@@ -988,12 +1073,18 @@ def run_case(
     learned_poisoned_memory: str | None = None
     traces: dict[str, Any] = {}
     controls: dict[str, dict[str, Any]] = {}
-    if need_learned and not deferred:
+    if always_defer:
+        from memform.defenses.common import EMPTY_MEMORY
+
+        learned_clean_memory = learned_poisoned_memory = EMPTY_MEMORY
+        traces["memory_update_bypassed"] = True
+    elif need_learned and not deferred:
         learned_clean_memory, learned_poisoned_memory, traces, controls = build_learned_memories(
             memory_model, memory_case, max_words, p5_updater,
             p5_random_orders=random_n,
             random_seed=random_seed,
             build_mechanism_controls=use_controls,
+            post_consolidation_guard=post_consolidation_guard,
         )
 
     if freeform:
