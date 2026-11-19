@@ -37,8 +37,8 @@ class SimulatedModel:
             payload = json.loads(user)
             if self.role == "selection":
                 omitted = payload.get("omitted", [])[:payload["limit"]]
-                output = json.dumps({"witnesses": [dict(record_id=e["record_id"], quote=e["text"],
-                                                        reason="Synthetic positional selection") for e in omitted]})
+                output = json.dumps({"witnesses": [dict(record_id=e["record_id"], quote=e["text"])
+                                                     for e in omitted]})
             else:
                 output = json.dumps({"verdict": "inconclusive", "material_change": False,
                                      "reason": "Synthetic backend performs no semantic verification"})

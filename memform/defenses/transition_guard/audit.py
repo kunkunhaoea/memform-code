@@ -1,15 +1,20 @@
 """Compile a cited repair audit into a decision; never infer safety from prose."""
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from .interface import Evidence, MemoryTransition
 from .citations import observation_quote
 
 
-AUDIT_SCHEMA = "repair-audit-v2"
+AUDIT_SCHEMA = "repair-audit-v3"
 CHECKS = ("knowledge_preservation", "claim_support", "gap_resolution",
           "policy_consistency", "unknown_handling", "permission_scope")
+
+
+def _reason(row: dict[str, Any]) -> bool:
+    return isinstance(row.get("reason"), str) and bool(row["reason"].strip())
 
 
 def cited_records(value: Any, evidence: tuple[Evidence, ...]) -> set[str] | None:
@@ -34,6 +39,95 @@ def exact_quotes(value: Any, text: str) -> bool:
         isinstance(q, str) and len(q.strip()) >= 12 and q in text for q in value)
 
 
+def expand_audit(support: dict[str, Any], evidence: tuple[Evidence, ...]) -> tuple[dict[str, Any], list[str]]:
+    """Expand compact references, never synthesize a judgment or a supporting quote.
+
+    The model quotes each observation once in citation_table. Citation references
+    and repaired-policy unit references are zero-based integers (never booleans).
+    Expanded v3 reports remain accepted for offline diagnostics. Old schema
+    versions are still rejected by compile_audit.
+    """
+    report = copy.deepcopy(support)
+    errors: list[str] = []
+    compact = "citation_table" in report or "report_format" in report
+    if not compact:
+        return report, errors
+    if report.get("report_format") != "compact-v1":
+        errors.append("compact:report_format")
+    table = report.get("citation_table")
+    if not isinstance(table, list):
+        errors.append("compact:citation_table")
+        table = []
+    for index, citation in enumerate(table):
+        if not cited_records([citation], evidence):
+            errors.append(f"compact:citation_table:{index}:invalid_citation")
+    units = report.get("policy_units")
+    policy = [unit.get("policy_quote") if isinstance(unit, dict) else None
+              for unit in units] if isinstance(units, list) else []
+
+    def reference(value: Any, entries: list, path: str) -> Any:
+        if type(value) is not int or not 0 <= value < len(entries):
+            errors.append("compact:" + path + ":invalid_reference")
+            return None
+        return copy.deepcopy(entries[value])
+
+    def visit(value: Any, path: str) -> None:
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                visit(item, f"{path}:{index}")
+        elif isinstance(value, dict):
+            for key, item in list(value.items()):
+                if key == "citation_table":
+                    continue
+                if key == "citations" and isinstance(item, list):
+                    value[key] = [reference(ref, table, path + ":citations") for ref in item]
+                elif key == "evidence_checks" and isinstance(item, list):
+                    assessments = []
+                    for index, assessment in enumerate(item):
+                        location = f"{path}:evidence_checks:{index}"
+                        if not isinstance(assessment, dict):
+                            errors.append("compact:" + location + ":invalid_assessment")
+                            assessments.append(assessment)
+                            continue
+                        citation = reference(assessment.get("citation"), table, location)
+                        if "record_id" in assessment or "quote" in assessment:
+                            errors.append("compact:" + location + ":mixed_citation_formats")
+                        expanded = {k: v for k, v in assessment.items() if k != "citation"}
+                        if isinstance(citation, dict):
+                            expanded.update(record_id=citation.get("record_id"), quote=citation.get("quote"))
+                        assessments.append(expanded)
+                    value[key] = assessments
+                elif key in {"policy_quotes", "uncertainty_quotes"} and isinstance(item, list):
+                    # Literal subspans are also allowed; original_quotes always
+                    # refer to the original memory and are never unit indices.
+                    value[key] = [ref if isinstance(ref, str) else reference(ref, policy, path + ":" + key)
+                                  for ref in item]
+                else:
+                    visit(item, path + ":" + key)
+
+    visit(report, "report")
+    checks = report.get("checks")
+    if isinstance(checks, list):
+        rows = []
+        for item in checks:
+            if not isinstance(item, list) or len(item) != 2:
+                errors.append("compact:invalid_check_pair")
+                continue
+            name, value = item
+            if isinstance(value, str):
+                rows.append({"check": name, "status": value, "findings": []})
+            elif isinstance(value, dict):
+                if "check" in value:
+                    errors.append("compact:duplicate_check_name")
+                rows.append({**value, "check": name})
+            else:
+                rows.append({"check": name, "status": None, "findings": None})
+        report["checks"] = rows
+    else:
+        errors.append("compact:checks_not_list")
+    return report, errors
+
+
 def compile_audit(support: dict[str, Any], t: MemoryTransition, memory: str,
                   edits: list[dict[str, Any]], witness: tuple[Evidence, ...]) -> dict[str, Any]:
     """Malformed/contradictory reports are inconclusive, never approved or relabelled safe.
@@ -43,7 +137,7 @@ def compile_audit(support: dict[str, Any], t: MemoryTransition, memory: str,
     and locate the relevant repaired policy span before it counts as covered.
     """
     evidence = t.selected_experiences + witness
-    errors: list[str] = []
+    support, errors = expand_audit(support, evidence)
     failed: list[str] = []
     unknown: list[str] = []
     cited: set[str] = set()
@@ -147,7 +241,7 @@ def compile_audit(support: dict[str, Any], t: MemoryTransition, memory: str,
         source_status = selected_review.get("status")
         if (not source_cites or not exact_quotes(source_quotes, memory) or not source_quotes
                 or source_status not in ("preserved", "qualified", "unsupported", "inconclusive")
-                or not isinstance(selected_review.get("reason"), str) or not selected_review["reason"].strip()):
+                or (source_status in {"unsupported", "inconclusive"} and not _reason(selected_review))):
             errors.append("selected_evidence_review:invalid_or_unlocated")
         else:
             cited.update(source_cites)
@@ -188,7 +282,7 @@ def compile_audit(support: dict[str, Any], t: MemoryTransition, memory: str,
         assessments = unit.get("evidence_checks")
         if (status not in ("supported", "unsupported", "inconclusive") or type(introduced) is not bool
                 or not isinstance(assessments, list) or not assessments
-                or not isinstance(unit.get("reason"), str) or not unit["reason"].strip()):
+                or (status != "supported" and not _reason(unit))):
             errors.append(key + ":invalid_permission_audit")
             units_ok = False
             continue
@@ -199,7 +293,7 @@ def compile_audit(support: dict[str, Any], t: MemoryTransition, memory: str,
             ids = cited_records([assessment], evidence)
             if (not ids or ids & seen_records
                     or relation not in ("supports", "contradicts", "context_only", "uncertain")
-                    or not isinstance(assessment.get("reason"), str) or not assessment["reason"].strip()):
+                    or (relation in {"contradicts", "uncertain"} and not _reason(assessment))):
                 errors.append(key + ":invalid_evidence_assessment")
                 units_ok = False
                 continue

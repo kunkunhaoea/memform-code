@@ -1,0 +1,141 @@
+{
+  "version": "p4-large-history-v1",
+  "seed": 42,
+  "sizes": [
+    9,
+    50,
+    100,
+    500,
+    1000
+  ],
+  "source_sha256": "f2dd71639b43a998d6b720fe2f258d0bb9452f567396f6979ef31e3482eaaa4a",
+  "generator_sha256": "f5ee8921226d58b0ccc561f51c497b8b6d5d0761d8d2f3f47c6ea4df8a05380c",
+  "source": "/home/lukun/projects/paper_workflow/memform-code/outputs/mcq_item_audit/accepted_cases.jsonl",
+  "cases_per_size": 144,
+  "donor_bank_size": 2106,
+  "pilot_size": 32,
+  "minimum_eligible_backgrounds": 1512,
+  "semantic_status": "lexically_screened_not_independently_semantically_certified",
+  "profiles": {
+    "9": {
+      "cases": 144,
+      "pool_records": 9,
+      "background_records": 0,
+      "observation_words_min": 354,
+      "observation_words_max": 551,
+      "observation_chars_min": 2542,
+      "observation_chars_max": 3626
+    },
+    "50": {
+      "cases": 144,
+      "pool_records": 50,
+      "background_records": 41,
+      "observation_words_min": 2314,
+      "observation_words_max": 2588,
+      "observation_chars_min": 16000,
+      "observation_chars_max": 17776
+    },
+    "100": {
+      "cases": 144,
+      "pool_records": 100,
+      "background_records": 91,
+      "observation_words_min": 4695,
+      "observation_words_max": 5044,
+      "observation_chars_min": 32305,
+      "observation_chars_max": 34708
+    },
+    "500": {
+      "cases": 144,
+      "pool_records": 500,
+      "background_records": 491,
+      "observation_words_min": 23887,
+      "observation_words_max": 24619,
+      "observation_chars_min": 165419,
+      "observation_chars_max": 169929
+    },
+    "1000": {
+      "cases": 144,
+      "pool_records": 1000,
+      "background_records": 991,
+      "observation_words_min": 48039,
+      "observation_words_max": 49029,
+      "observation_chars_min": 332602,
+      "observation_chars_max": 338857
+    }
+  },
+  "files": {
+    "N100/cases.jsonl": {
+      "sha256": "d45142c51463792aa1cb8081acbff58eb0c0ba8bd330852abf98d09fa32a3e26",
+      "bytes": 6458700
+    },
+    "N100/selected_cases.json": {
+      "sha256": "8e767efe09292da64ca99a6867d0e31f2c3d335f6943531683574ad15f4c6c1c",
+      "bytes": 17605
+    },
+    "N100/selected_cases_32.json": {
+      "sha256": "d43cb6fd9836403c8c4f9e409967199bd7c270d295089282436dfdf6ff228e9e",
+      "bytes": 4089
+    },
+    "N1000/cases.jsonl": {
+      "sha256": "5c2ff03d009458e271b117d0f0c3030e51b1d8586256e0f5f04bbcb104b6a3e2",
+      "bytes": 54610678
+    },
+    "N1000/selected_cases.json": {
+      "sha256": "1683e72348d115c7df9eaac3dcd7de5e634b1acfde6fb8a8ef9755c1bf7fe720",
+      "bytes": 17605
+    },
+    "N1000/selected_cases_32.json": {
+      "sha256": "a01d0a373e2eb5785d245f622305baf1847a109fd489eba81952af414acf0940",
+      "bytes": 4089
+    },
+    "N50/cases.jsonl": {
+      "sha256": "9c7f874838c11e7050f2431214c9771d4fe28b9179cbe77e0a653c1377c125a4",
+      "bytes": 3800541
+    },
+    "N50/selected_cases.json": {
+      "sha256": "85cfc0b9da2ed569ade0e7163fe162070670bb166a65ba426d60066bdbf47a35",
+      "bytes": 17605
+    },
+    "N50/selected_cases_32.json": {
+      "sha256": "2ac125b244706770b847a8bb555215ce59071a4d9ee51f9d406d4d68912c5c22",
+      "bytes": 4089
+    },
+    "N500/cases.jsonl": {
+      "sha256": "37db6b0bc1de5e1e2f473bd2eb67c5b8a6d8265a93a2a63480d7f773f1f639cb",
+      "bytes": 27866028
+    },
+    "N500/selected_cases.json": {
+      "sha256": "9c5bfc03c8beda7a08d7b27ee007619274685c738fbb53f45edfc6ecaf189b7d",
+      "bytes": 17605
+    },
+    "N500/selected_cases_32.json": {
+      "sha256": "e69e168e914d66b3995888149147f26c7248df0958465738b0d1e2b2cc55d17b",
+      "bytes": 4089
+    },
+    "N9/cases.jsonl": {
+      "sha256": "4e223598e15e49799026fa13865640491c49a33a6b8aca3c3c996ef810f23b04",
+      "bytes": 1550170
+    },
+    "N9/selected_cases.json": {
+      "sha256": "6d17a30672bf0eb2b3ac6adfab317edc15cbe97a4429cee2492e82dcd5b07804",
+      "bytes": 17605
+    },
+    "N9/selected_cases_32.json": {
+      "sha256": "44210c260ba6adef49b924d3f770d514d0f8bbe32f8041d89b21361f7c976d2f",
+      "bytes": 4089
+    },
+    "README.md": {
+      "sha256": "9ca37dee54050d522cf93fdb16e51770419ca5eb680d679b7958d972ba67b662",
+      "bytes": 3314
+    },
+    "case_plans.jsonl": {
+      "sha256": "77e946f0369db25e12277d9de34c74c272c80a1771ab753c747aa95565327902",
+      "bytes": 10640794
+    },
+    "donor_bank.jsonl": {
+      "sha256": "d6a615f515357bf5acfd08a12cc0c645b30a9cdca47f52cb515f2faf961decda",
+      "bytes": 1937045
+    }
+  },
+  "api_calls": 0
+}

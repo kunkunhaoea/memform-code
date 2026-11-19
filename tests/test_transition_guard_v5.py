@@ -128,7 +128,7 @@ class AuditV5Tests(unittest.TestCase):
         report = copy.deepcopy(self.report)
         report["schema_version"] = "repair-audit-v1"
         self.assertIn("schema_version", self.compile(report)["protocol_errors"])
-        self.assertEqual(AUDIT_SCHEMA, "repair-audit-v2")
+        self.assertEqual(AUDIT_SCHEMA, "repair-audit-v3")
 
     def test_new_counters_distinguish_quote_correction_and_branch_failure(self):
         report = copy.deepcopy(self.report)

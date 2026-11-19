@@ -1,6 +1,6 @@
 # TransitionGuard P4 MVP
 
-**当前防御算法为v5（repair-audit-v2），新增B5 Always-defer对照；默认仍只运行B4。** 最新真实结果、协议边界与命令以[根目录handoff.md](../../handoff.md)为准；以下早期设计、版本和环境状态保留为历史说明。
+**当前源码为v6（repair-audit-v3）：选择阶段不生成理由，独立审核采用引用表、策略片段编号与简短成功项；原语义检查及独立审核保留。包含B5 Always-defer，默认仍只运行B4。** 2026-11-19：N=9/50/100/500/1000每个规模144条×7组真实比较均已完整，正式结果从[results索引](../../results/README.md)读取；此前小样本、旧版、mock等已按用户授权整理清理。状态以[handoff第0.5节](../../handoff.md)为准；以下早期设计、命令、版本和环境状态仅作历史说明。
 
 B5直接跳过记忆生成和全部防御调用，使用与B4回退完全相同的EMPTY_MEMORY运行原Agent。单独运行也支持，无需B0候选；有B0时仅引用其候选作为日志，不重复计费。B5的clean/poisoned输入相同，沿用缓存复用响应；原memory=None baseline是不同输入。summary新增全样本always_defer_comparison，comparison.md显示相对B5的逐条胜负和准确率差，缺失/无效结果不作为收益。
 
@@ -15,7 +15,7 @@ python -B -m experiments.transition_guard_p4.run_experiment \
   --cache .cache/transition_guard_p4.jsonl
 ```
 
-不带旧16条manifest或旧resume-from。B0–B4 Prompt和缓存namespace未变，可合法复用相同请求缓存；源码指纹已更新，旧整行结果不可直接续跑。已通过119项离线测试和144条六组零API预检，尚未运行正式B5/全量付费实验。
+该命令用于复现N9六组，不需要为已完成的正式结果再次运行。复用缓存与续跑必须核验版本/配置；当前154项离线测试已通过。历史旧目录如已清理，其开发样本清单可在results清理审计的removed_metadata中查找。
 
 **2026-11-16：已实现 v2 源码修复与有界检索，尚未跑 v2 真实实验。当前复测命令、预算与行为以 [V2_NOTES.md](V2_NOTES.md) 为准。下文保留 v1 的原始设计和实验记录；其中首缺口提前修复、S + 单次 witness 修复及全池 LLM 选择等描述不再代表 v2。**
 
@@ -287,6 +287,59 @@ cache hit 没有本次 API token 消耗；日志可保留缓存条目的原 usag
 `results/transition_guard_p4/20261116T061612_858191Z_live/pilot_analysis.md`。
 其中固定 E=14，B3 缺 1 条、B4 缺 9 条；其主要 ASR 仍未完整。
 当前共 32 项离线测试通过，新增 6 项续跑测试与 1 项安全异常原因链测试，原防御算法和 Prompt 未改动。
+
+## 外部防御比较（2026-11-18，v6保持不变）
+
+新增独立入口 `compare_external.py`，复用原生MemForm防御：D1=`llm_judge`、D2=`task_shield`、D3=`a_memguard`。
+不改这些方法的Prompt、阈值、反馈轮数，也不改原v6或B0—B5入口。D1不同于B1。
+D2/D3应报告为MemForm适配版；D3的lesson检索仍是原适配器的近似实现。
+
+一次跑N=9/50/100/500/1000，每个规模同一批32个family：
+
+```bash
+bash experiments/transition_guard_p4/run_external_sweep.sh live
+```
+
+只做数据/历史配对预检、不调用API：
+
+```bash
+bash experiments/transition_guard_p4/run_external_sweep.sh validate
+```
+
+脚本复用已有B0/B2/B4/B5，只运行每个N新增的3×32=96个case-method单元（每单元含clean/poisoned）。
+五个N总计480个新增单元；不是480次API请求。每个N保存独立目录，路径由`Results:`输出。
+脚本遇到不完整结果返回非零并停止，先用下方resume补齐该N，再单独执行后续N。
+默认Python为`/home/lukun/miniconda3/envs/memform/bin/python`，可用`MEMFORM_PYTHON`覆盖。
+
+单独跑N=1000：
+
+```bash
+/home/lukun/miniconda3/envs/memform/bin/python -B -m experiments.transition_guard_p4.compare_external \
+  --mode live \
+  --cases data/transition_guard_p4_large_history/v1_seed42/N1000/cases.jsonl \
+  --manifest data/transition_guard_p4_large_history/v1_seed42/N1000/selected_cases_32.json \
+  --reference-run results/transition_guard_p4/20261118T112816_480415Z_live \
+  --methods D1 D2 D3
+```
+
+断点续跑：保持该N命令所有参数，追加`--resume-from results/transition_guard_p4_external/实际结果目录`。
+新建目录保留完成结果，只有缺失/技术失败单元重跑；不按答案正确性筛选。也可首次用`--methods D1`等指定方法，续跑方法集合须一致。
+
+模型、Agent/Updater思考开关、guard模型与思考开关、8192输出预算（当前历史配置）、timeout、memory词数和缓存路径从配对历史配置继承；
+外部防御temperature=0。`.env`加载方式不变，并核验实际endpoint指纹。
+N9新快照文件hash不同于原混合接口文件，仅在原数据hash与每个选中case对象完全一致后允许复用；其他N直接核验source hash。
+
+信息边界：D1只看S及domain/decision variable；D2看最终记忆与当前任务；D3看S及当前任务。
+三者均不自动补入遗漏历史；B4仍能检索H\\S，B2读取全H，须在论文中披露此权限差异。
+只在传给原生runner的内存副本里移除未使用mechanism_controls，避免原write-time适配器额外检查full_pool；不改源数据。
+D2仅对有记忆条件启用检查，普通no-memory诊断保持B0含义，避免给诊断额外添加下游防御成本。
+
+输出`case_results.jsonl`、`defense_log.jsonl`、`call_events.jsonl`、`summary.json`和`comparison.md`。
+共7行方法：B0/B2/B4/B5/D1/D2/D3；固定B0 eligibility及Recovery分母，另报全样本clean/poisoned准确率。
+Task Shield语义阻断计任务错误、攻击未成功；未恢复解析失败或缺失结果使主指标不可用，不能当作防御收益。
+`logical_usage`包含缓存响应原usage，`new_run_cost`只含本次新增事件，历史费用单列；调用累计时间不是冷启动墙钟时间。
+跨N会共享完全相同的Agent/Updater及外部防御请求缓存；S不变时部分结果可能精确复用，不是独立重复试验。
+大历史数据仍是本项目构造的跨工作流背景压力集，不是官方大N基准。
 
 ## 主要限制与后续研究
 

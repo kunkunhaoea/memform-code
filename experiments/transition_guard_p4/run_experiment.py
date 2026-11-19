@@ -21,6 +21,7 @@ from memform.common import load_env, read_jsonl, stable_hash, validate_compiled_
 from memform.defenses.metrics import file_sha256
 from memform.defenses.common import EMPTY_MEMORY
 from memform.defenses.transition_guard.guard import GROUPS, VERSION, TransitionGuard
+from memform.defenses.transition_guard.audit import AUDIT_SCHEMA
 from memform.defenses.transition_guard.interface import GuardResult
 from memform.eval.core import DiskCache, run_case
 from experiments.transition_guard_p4.runtime import make_models, summarize_cost
@@ -59,7 +60,7 @@ def load_resume(
     previous = json.loads((directory / "run_config.json").read_text())
     old_manifest = json.loads((directory / "selected_cases.json").read_text())
     identity_fields = (
-        "version", "seed", "groups", "strategy", "k", "max_rebuilds", "model", "guard_model",
+        "version", "audit_schema", "seed", "groups", "strategy", "k", "max_rebuilds", "model", "guard_model",
         "temperature", "max_memory_words", "source_sha256", "active_case_ids", "endpoint_fingerprint",
         "defer_semantics",
         "always_defer_control_version",
@@ -221,7 +222,7 @@ def main() -> None:
     out = args.output_dir or ROOT / "results/transition_guard_p4" / f"{stamp}_{args.mode}"
     active = selected[:args.limit] if args.limit else selected
     groups = [g for g in GROUPS if g in args.groups]
-    configuration = {"version": VERSION, "mode": args.mode,
+    configuration = {"version": VERSION, "audit_schema": AUDIT_SCHEMA, "mode": args.mode,
                      "implementation_sha256": stable_hash({
                          name: file_sha256(ROOT / name) for name in (
                              "memform/defenses/transition_guard/guard.py",
